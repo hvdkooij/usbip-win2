@@ -43,6 +43,12 @@ struct devnode_remove_args
         bool dry_run{};
 };
 
+struct classfilter_args
+{
+        std::wstring infpath;
+        std::wstring section_name;
+};
+
 using command_f = std::function<bool()>;
 
 auto pack(command_f cmd) 
@@ -290,6 +296,70 @@ auto remove_devnode(_In_ devnode_remove_args &r)
         return true;
 }
 
+/*
+ * Perform registry operations AddReg, DelReg in the Install section being processed.
+ * DiInstallDriver does not run AddReg, DiUninstallDriver does not run DelReg.
+ */
+auto install_registry(_In_ HINF hinf, _In_ const classfilter_args &r)
+{
+        std::wstring class_name;
+        auto class_guid = get_class_guid(class_name, r.infpath.c_str());
+        if (class_guid == GUID_NULL) {
+                return false; 
+        }
+
+        HKey key(SetupDiOpenClassRegKey(&class_guid, KEY_WRITE));
+        if (!key) {
+                errmsg("SetupDiOpenClassRegKey", class_name.c_str());
+                return false;
+        }
+
+        if (!SetupInstallFromInfSection(nullptr, hinf, r.section_name.c_str(), SPINST_REGISTRY, key.get(),
+                        nullptr, // SourceRootPath
+                        0, // CopyFlags if Flags includes SPINST_FILES
+                        nullptr, // MsgHandler
+                        nullptr, // Context
+                        nullptr, // DeviceInfoSet
+                        nullptr)) { // DeviceInfoData
+                errmsg("SetupInstallFromInfSection", r.section_name.c_str());
+                return false;
+        }
+
+        return true;
+}
+
+/*
+ * Primitive drivers targeted only for Windows 10 version 1903 and later 
+ * should use DiInstallDriver and DiUninstallDriver to properly 
+ * install and uninstall their software in/from the driver store.
+ * 
+ * Creating a new primitive driver.
+ * @see https://learn.microsoft.com/en-us/windows-hardware/drivers/develop/creating-a-primitive-driver
+ * 
+ * Install a class filter driver.
+ * @see https://learn.microsoft.com/en-us/windows-hardware/drivers/install/installing-a-filter-driver
+ */
+auto classfilter_install(_In_ const classfilter_args &r, _In_ bool install)
+{
+        HInf inf(SetupOpenInfFile(r.infpath.c_str(), nullptr, INF_STYLE_WIN4, nullptr));
+        if (!inf) {
+                errmsg("SetupOpenInfFile", r.infpath.c_str());
+                return false;
+        }
+
+        auto ok = true;
+
+        if (install) {
+                ok = DiInstallDriver(nullptr, r.infpath.c_str(), DIIRFLAG_FORCE_INF, nullptr) &&
+                     install_registry(inf.get(), r);
+        } else { // ignore errors
+                ok &= install_registry(inf.get(), r);
+                ok &= !!DiUninstallDriver(nullptr, r.infpath.c_str(), 0, nullptr);
+        }
+
+        return ok;
+}
+
 void add_devnode_install_cmd(_In_ CLI::App &app)
 {
         static devnode_install_args r;
@@ -320,6 +390,33 @@ void add_devnode_remove_cmd(_In_ CLI::App &app)
         cmd->callback(pack(std::move(f)));
 }
 
+void add_devnode_cmds(_In_ CLI::App &app)
+{
+        add_devnode_install_cmd(app);
+        add_devnode_remove_cmd(app);
+}
+
+void add_classfilter_cmds(_In_ CLI::App &app)
+{
+        static classfilter_args r;
+        auto &install = "install";
+
+        for (auto action: {install, "uninstall"}) {
+                auto cmd = app.add_subcommand(action, std::string(action) + " class filter driver");
+
+                cmd->add_option("infpath", r.infpath, "Path to the driver's .inf file")
+                        ->check(CLI::ExistingFile)
+                        ->required();
+
+                cmd->add_option("section_name", r.section_name, 
+                        "The name of the " + std::string(action) + " section that lists CopyFiles/DelFiles/RenFiles sections")
+                        ->required();
+
+                auto f = [&r = r, install = action == install] { return classfilter_install(r, install); };
+                cmd->callback(pack(std::move(f)));
+        }
+}
+
 } // namespace
 
 
@@ -330,8 +427,19 @@ int wmain(_In_ int argc, _Inout_ wchar_t* argv[])
         app.option_defaults()->always_capture_default();
         app.set_version_flag("-V,--version", get_version(*argv));
 
-        add_devnode_install_cmd(app);
-        add_devnode_remove_cmd(app);
+        auto &devnode = L"devnode";
+        auto &classfilter = L"classfilter";
+
+        if (auto program = std::filesystem::path(*argv).stem(); program == devnode) {
+                add_devnode_cmds(app);
+        } else if (program == classfilter) {
+                add_classfilter_cmds(app);
+        } else {
+                fwprintf(stderr, L"Program name must be '%s' or '%s', not '%s'\n", 
+                                   devnode, classfilter, program.c_str());
+
+                return EXIT_FAILURE;
+        }
 
         app.require_subcommand(1);
         CLI11_PARSE(app, argc, argv);
