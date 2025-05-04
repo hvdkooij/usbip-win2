@@ -14,7 +14,8 @@ CatalogFile = usbip2_filter.cat
 PnpLockDown = 1
 
 [DestinationDirs]
-DefaultDestDir = 13 ; Driver Store
+; If set 13 (DriverStore), HLK Studio will show DriverName=usbip2_filter.sys for all USB devices.
+DefaultDestDir = 12 ; %SystemRoot%\system32\drivers
 
 [SourceDisksNames]
 1 = "USBip Upper-Level Class Filter Installation Disk"
@@ -47,7 +48,7 @@ DisplayName    = %DisplayName%
 ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
 StartType      = 3               ; SERVICE_DEMAND_START
 ErrorControl   = 2               ; SERVICE_ERROR_SEVERE
-ServiceBinary  = %13%\usbip2_filter.sys
+ServiceBinary  = %12%\usbip2_filter.sys
 AddReg         = usbip2_filter_Service_AddReg
 
 [usbip2_filter_Service_AddReg]
