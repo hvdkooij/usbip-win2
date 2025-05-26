@@ -1,10 +1,9 @@
-This is an upper-level class filter driver which is required for Emulated Host Controller driver usbip2_ude.
+This is a device-specific upper filter driver which is required for Emulated Host Controller driver usbip2_ude.
 UDE doesn't propagate correctly SELECT_CONFIGURATION/SELECT_INTERFACE and this is a major issue.
 This driver fixes that. 
 
-Driver's class is "USB host controllers and USB hubs". 
-This means its DRIVER_ADD_DEVICE routine will be called by PnP Manager for such PDO-s.
-The driver creates Filter Device Object for "USB Root Hub (USB 3.0)" located on Emulated Host Controller.
+DRIVER_ADD_DEVICE routine will be called by PnP Manager for each PDO with HWID USB\ROOT_HUB30.
+The driver creates Filter Device Object for PDO located on Emulated Host Controller.
 It does not create FDOs for USB Hubs located on other USB Host Controllers.
 
 The device stack of "USB Root Hub (USB 3.0)" located on "USBip 3.X Emulated Host Controller":
@@ -19,11 +18,9 @@ IRP_MJ_INTERNAL_DEVICE_CONTROL -> IOCTL_INTERNAL_USB_SUBMIT_URB -> URB_FUNCTION_
 For each such request it creates _URB_CONTROL_TRANSFER_EX and passes it down.
 In such way usbip2_ude driver receives required information.
 
-### Alternative implementation #1
+###
 
-Commit "Use an Extension INF file for filter driver", 938050eb9385f18c578354e0e50ba708f61b1dc5 
-It installs an upper filter for each device with hardware id USB\ROOT_HUB30.
-The critical issue is that the driver install/delete restarts all hubs:
+The issue of this implementation is that the driver install/delete restarts all hubs:
      dvi:                     Restart required for any devices using this driver.
      dvi:                     Install Device: Configuring device. 11:09:57.122
      dvi:                          Configuration: usbhub3.inf:USB\ROOT_HUB30,Generic.Install.NT
@@ -42,10 +39,14 @@ The critical issue is that the driver install/delete restarts all hubs:
      dvi:                          Start: USB\ROOT_HUB30\4&62F4A8E&0&0
      dvi:                     {Restarting Devices exit} 11:10:05.453
 
-If set HWID of particular USB Hub (f.e. USB\ROOT_HUB30&VID8086&PID15EC&REV0006), it will not help and 
+If set HWID of particular USB Hub (f.e. USB\ROOT_HUB30&VID8086&PID15EC&REV0006),
 all hubs will be restarted anyway. See message "Restart required for any devices using this driver").
 
-### Alternative implementation #2
+Set upper filter for Emulated HC only is a good idea, but it is not possible to preprocess PNP request
+to modify its HWID. WdfDeviceInitAssignWdmIrpPreprocessCallback will return STATUS_INVALID_DEVICE_REQUEST
+if pass IRP_MJ_PNP/IRP_MN_QUERY_ID. If pass IRP_MJ_PNP only, the callback will never be called.
+
+### Alternative implementation
 
 Commit "Use AddFilter directive instead of AddReg/DelReg", af6715703d71a3acce9039fee78fb366ae9256f9
 It installs an upper filter for all Class=USB devices. 
@@ -71,9 +72,3 @@ The critical issue is the same as for the first solution, but there are more aff
      dvi:           Start: USB\ROOT_HUB30\4&62F4A8E&0&0
      dvi:      {Restarting Devices exit} 09:27:20.575
 !    dvi:      Reboot required to restart all devices in class.
-
-###
-
-That's why the old style "UpperFilters" registry value is used instead of AddFilter. 
-It allows to install/delete the filter driver without restaring other USB devices, 
-reboot is not required either.
